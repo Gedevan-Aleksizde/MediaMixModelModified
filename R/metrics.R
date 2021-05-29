@@ -127,6 +127,9 @@ adstock_o_hill <- function(x, params, L, weights){
   )
 }
 
+media_cols <- function(data){
+  data[, colnames(data)]
+}
 
 
 #' @name ROAS
@@ -150,10 +153,11 @@ ROAS <- function(fit, data = NULL, L, controls = "price", reference = 0, inverse
     newdata$X_media <- reference
   }
   pred_ref <- predict(fit, newdata = newdata, inverse_trans)
-  d <- expand_grid(
-    tibble(ROAS = rowSums(pred - pred_ref)),
-    tibble(media = names(spend), x = spend)
+  d <- expand.grid(
+    ROAS = rowSums(pred - pred_ref),
+    media = names(spend)
   )
+  d$x <- with(d, spend[media])
   d$ROAS <- with(d, ROAS/x)
   d$x <- NULL
   return(d)
@@ -172,10 +176,11 @@ mROAS <- function(fit, data = NULL, L, controls = "price", rate = 0.01, inverse_
   data <- mutate(data, across(starts_with("media"), ~.x * rate))
   newdata <- to_stan_data(data, L = L, controls = controls)
   pred <- predict(fit, newdata = newdata, inverse_trans = inverse_trans)
-  d <- expand_grid(
-    tibble(mROAS = rowSums(pred - pred_ref)),
-    tibble(media = names(spend), x = spend)
-  )
+  d <- expand.grid(
+    ROAS = rowSums(pred - pred_ref),
+    media = names(spend)
+    )
+  d$x <- with(d, spend[media])
   d$mROAS <- with(d, mROAS/x)
   d$x <- NULL
   return(d)
