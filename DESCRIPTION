@@ -1,0 +1,23 @@
+Package: MediaMixModelModified
+Title: Modified Media Mix Model using rstan
+Version: 0.0.0.9001
+Authors@R: 
+    person(given = "Satoshi",
+           family = "Katagiri",
+           role = c("aut", "cre"),
+           email = "katagiri.stsh@gmail.com")
+Description: What the package does (one paragraph).
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.1
+Imports: 
+    bayesplot (>= 1.8.0),
+    dplyr (>= 1.0.5),
+    ggplot2 (>= 3.3.3),
+    lubridate (>= 1.7.10),
+    rstan (>= 2.21.2),
+    slider (>= 0.2.1),
+    tibble (>= 3.1.2),
+    tidyr (>= 1.1.3)
