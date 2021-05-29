@@ -4,12 +4,14 @@
 \alias{predict}
 \title{Return predict values from MMM stan fit object}
 \usage{
-predict(fit, newdata = NULL)
+predict(fit, newdata = NULL, inverse_trans = NULL)
 }
 \arguments{
 \item{fit}{stanfit object.}
 
 \item{newdata}{same as stan input list. if not specified, return predicted values for fitting data.}
+
+\item{inverse_trans}{function. inverse transformation applying for the response variable}
 }
 \value{
 matrix, which has (iter x chain) rows and (Times) columns.

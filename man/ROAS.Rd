@@ -4,7 +4,14 @@
 \alias{ROAS}
 \title{Calculate (Marginal) Return On the Advertising Spendings}
 \usage{
-ROAS(fit, data = NULL, L, controls = "price", reference = 0)
+ROAS(
+  fit,
+  data = NULL,
+  L,
+  controls = "price",
+  reference = 0,
+  inverse_trans = NULL
+)
 }
 \arguments{
 \item{fit}{model parameter object}
@@ -12,6 +19,8 @@ ROAS(fit, data = NULL, L, controls = "price", reference = 0)
 \item{data}{data for extraporation}
 
 \item{reference}{numeric reference levels for spendings. default is zero.}
+
+\item{inverse_trans}{function. inverse transformation applying for the response variable}
 }
 \description{
 Calculate (Marginal) Return On the Advertising Spendings
