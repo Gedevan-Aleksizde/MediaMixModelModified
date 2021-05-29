@@ -1,6 +1,6 @@
 ---
 title: "`\\includegraphics{title}`{=latex}"
-date: "公開日: 2021/5/29 (Tokyo.R #92)"
+date: "最終更新: `r format(Sys.Date(), '%Y/%m/%d')` 公開日: 2021/5/29 (Tokyo.R #92)"
 author: "Katagiri, Satoshi (\\@ill-identified)"
 output:
   rmdja::beamer_presentation_ja:
@@ -126,19 +126,6 @@ $$
 * スポットより数日間のまとまった支出のほうが効果ありそう
 
 ```{r, message=F, out.height="60%"}
-geo_weight <- function(l, alpha, theta){
-  alpha^((l - theta)^2)
-}
-adstock <- function(x, weights, L, args, na.rm = T){
-  args$l <- 1:L
-  w <- do.call(weights, args)
-  sum(w * x[1:L], na.rm)/sum(w, na.rm)
-}
-
-hill <- function(x, k, s){
-  1/(x/k)^-s
-}
-
 set.seed(42)
 d <- tibble(t = seq(ymd("2021-03-01"), ymd("2021-04-30"), "1 days")) %>%
   mutate(spend = rnorm(n = n()))
@@ -216,7 +203,7 @@ ggplot(tibble(x = 1:20), aes(x = x)) + geom_function(fun = function(x) x^(1/4)) 
 :::{.col data-latex="{0.4\textwidth}"}
 
 ```{r hill-image, fig.cap="hill 関数の例"}
-bhill <- function(x, b, k, s) b * MediaMixModelModified::hill(x, k, s)
+bhill <- function(x, b, k, s) b * hill(x, k, s)
 tibble(x = seq(0, 1.5, by = .05)) %>%
   ggplot(aes(x = x)) +
   stat_function(fun = bhill, args = list(k = .5, s = 1, b = .3),
@@ -315,14 +302,6 @@ $$
     * 軽量な Stan インターフェイス
     * ただし **rstanarm**, **brms** は **rstan** 依存 
 
-## 原文の提案
-
-1. 2つの効果を考えた複雑なモデルにする
-2. モデルの係数を計算する
-3. 係数から広告投資リターン計算
-4. $x$ を変数に最適化問題を解く
-    * 最適配分がわかる
-
 ## 修正内容
 
 * 著者のコードを以下の点で修正
@@ -348,12 +327,14 @@ $$
 * (個人的な経験則) 計算時のエラーはだいたい
     1. 初期値や事前分布の値域が不適切
     1. データの値が不適切
-* `print`, `reject` を使う ([7.12](https://mc-stan.org/docs/2_21/reference-manual/reject-statements-section.html))
+
 * 変数に定義域を与える
 
     ```{cmdstan, echo=T, eval=F, output.var='priors'}
     row_vector<lower=0>[max_lag] X_media[N, num_media];
     ```
+
+* `print`, `reject` を使う ([7.12](https://mc-stan.org/docs/2_21/reference-manual/reject-statements-section.html))
 
 ## Stan のバグトラッキング: 具体的な修正
 
@@ -528,7 +509,7 @@ file.copy(system.file("stanmodels/modified.stan", package = "MediaMixModelModifi
 model <-
   stan_model(
     file = "modified.stan",
-    model_name = "original",
+    model_name = "modified",
     verbose = T
   )
 res <- sampling(
@@ -577,7 +558,7 @@ mcmc_rank_overlay(res, regex_pars = "beta", facet_args = list(ncol = 1)) +
   scale_color_pander()
 ```
 
-## 計算結果
+## 計算結果の確認 (一部のみ)
 
 (ref:cap-beta-area) $\beta_m$ のエリアプロット
 
@@ -599,19 +580,17 @@ mcmc_areas(res, regex_pars = "beta_media") +
     * **とても遅い**
 
 ```{r roas, cache=T, echo=T}
-roas <- ROAS(res, df_out, L = 13)
-mroas <- mROAS(res, df_out, L = 13)
+roas <- ROAS(res, df_out, L = 13, inverse_trans = exp)
+mroas <- mROAS(res, df_out, L = 13, inverse_trans = exp)
 ```
 
 ## 結果
 
-* 明らかにミスってるので後で修正します
+* ROAS/mROAS の分布
 
 ```{r plot-roas, fig.width=8, fig.height=3, out.height="30%"}
-ggplot(roas, aes(x = ROAS, group = media)) + geom_histogram(bins = 30) +
-  facet_wrap(~media)
-ggplot(mroas, aes(x = ROAS, group = media)) + geom_histogram(bins = 30) +
-  facet_wrap(~media)
+ggplot(roas, aes(x = media, y = ROAS)) + geom_violin()
+ggplot(mroas, aes(x = media, y = mROAS)) + geom_violin()
 ```
 
 # より大きな問題点
