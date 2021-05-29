@@ -1,6 +1,6 @@
 Package: MediaMixModelModified
 Title: Modified Media Mix Model using rstan
-Version: 0.0.0.9001
+Version: 0.0.0.901
 Authors@R: 
     person(given = "Satoshi",
            family = "Katagiri",
