@@ -5,6 +5,8 @@ Supplements for “Meida Mix model Modified” at Tokyo.R \#92
 
 Tokyo.R \#92 の資料&パッケージです
 
+https://speakerdeck.com/ktgrstsh/medeiamitukusumoderufalseli-dian-toxian-jie
+
 ## 使用法・動作環境
 
 -   Ubuntu 20.04
