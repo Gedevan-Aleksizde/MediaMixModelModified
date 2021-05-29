@@ -1,0 +1,705 @@
+---
+title: "`\\includegraphics{title}`{=latex}"
+date: "公開日: 2021/5/29 (Tokyo.R #92)"
+author: "Katagiri, Satoshi (\\@ill-identified)"
+output:
+  rmdja::beamer_presentation_ja:
+    theme: metropolis
+    theme_options:
+      - progressbar=frametitle
+      - subsectionpage=progressbar
+      - block=fill
+    latex_engine: xelatex
+link-citations: true
+linkcolor: blue
+citecolor: blue
+urlcolor: magenta
+fontsize: 12pt
+header-includes:
+  - \definecolor{mybgc}{RGB}{253,247,227}
+  - \setbeamercolor{background canvas}{bg=mybgc}
+  - \makeatletter
+  - \setlength{\metropolis@progressinheadfoot@linewidth}{2pt}
+  - \patchcmd{\beamer@sectionintoc}{\vskip1.5em}{\vskip0.5em}{}{}
+  - \makeatother
+  - \let\oldv\verbatim
+  - \let\oldendv\endverbatim
+  - \def\verbatim{\par\setbox0\vbox\bgroup\oldv}
+  - \def\endverbatim{\oldendv\egroup\fboxsep0pt \noindent\colorbox[gray]{0.8}{\usebox0}\par}
+  - '\AtEndPreamble{\hypersetup{pdftitle={Media Mix Model Modified: メディアミックスモデルの利点と限界}}}'
+  - \hypersetup{urlcolor=cyan}
+classoption:
+  - aspectratio=169
+mainfont: Noto Serif CJK JP
+sansfont: Noto Sans CJK JP
+monofont: Ricty
+jmainfont: Noto Serif CJK JP
+jsansfont: Noto Sans CJK JP
+jmonofont: Ricty
+bibliography:
+  - mmm.bib
+  - packages.bib
+---
+
+```{r, include=F}
+require(tidyverse)
+require(ggthemes)
+require(lubridate)
+require(slider)
+require(hrbrthemes)
+require(rstan)
+require(bayesplot)
+# require(patchwork)  # TODO: baysplot をうまく合成できない?
+require(ggpubr)
+require(MediaMixModelModified)
+
+rstan_options(javascript = F, auto_write = T)
+options(mc.cores = parallel::detectCores())
+
+theme_set(theme_ipsum(grid="Y"))
+```
+
+# 前置き
+
+## 自己紹介
+
+* ただの素人です
+* twitter ID: [\@ill-identified](https://twitter.com/ill_Identified)
+* [ブログ](https://ill-identified.hatenablog.com/)
+* ~~正直最近はstanあまり使ってない~~
+
+## 宣伝
+
+1. 『[R Markdown クックブック](https://gedevan-aleksizde.github.io/rmarkdown-cookbook/)』を翻訳した
+    * R Markdown の活用事例集です
+    * "[Bookdown](https://bookdown.org/yihui/bookdown/)" や "[Definitive Guide](https://bookdown.org/yihui/rmarkdown/)" もそのうち翻訳したい
+    * "[**knitr** のドキュメント](https://gedevan-aleksizde.github.io/knitr-doc-ja/)" も翻訳しています
+1. このスライドは [**rmdja**](https://github.com/Gedevan-Aleksizde/rmdja) パッケージで作成しました
+    * 意外と煩雑な **rmarkdown** での日本語文書の設定をなるべく自動化することを目的にしたパッケージ
+1. エッ! まだRのグラフの文字化けで消耗してるって!?
+    * [**ragg**](https://ragg.r-lib.org/) や [**fontregisterer**](https://github.com/Gedevan-Aleksizde/fontregisterer) を使うとよいことですよね?
+    * 参考 [1](https://speakerdeck.com/ktgrstsh/display-cjk-font-in-any-gpraphic-device-and-platform-2020), [2](https://uribo.hatenablog.com/entry/2021/03/29/202756)
+
+## 今日話すこと
+
+1. @46001 "[_Bayesian methods for media mix modeling with carryover and shape effects_](https://research.google/pubs/pub46001/)" の解説
+2. 実装と具体的な使い方
+3. レポートの問題点と改善提案
+
+* 回帰分析の基本的な理解があったほうが良い
+    * 詳しくない人は中盤の技術的な箇所は適当に聞き流してください
+* マーケティング関係の理解があったほうが良い
+    * 逆に私はあまりない (言い訳)
+* stan のヘビーユーザーには物足りないかも
+    * (言い訳その2)
+
+# Media Mix Model とは
+
+## メディア・ミックス・モデル (MMM)
+
+> あなたの会社は複数のチャネル (広告媒体) に支出しプロモーションを行ってきました
+> 
+> では, これらの広告費は回収できているのでしょうか?
+
+## 単純なメディア・ミックス・モデル
+
+* 毎日の費用と売上で回帰分析すればいいのでは?
+    * $M$, $T$: 支出したチャネルの数と期間
+    * $y_t$: 日付 $t$ の売上
+    * $x_{m,t}$: 日付 $t$, メディア $m$ への支出額
+* 回帰係数 $\beta_m$ が広告の限界効果!!
+
+$$
+y_t = \beta_1x_{1,t} + \beta_2x_{2,t} + ... + \beta_Mx_{M,t}
+$$
+
+## 指摘されている問題点
+
+* [@46001] の言いたいこと: 「単純に同時点で回帰しただけではダメでしょ」
+* 経験的に, 以下の2点で問題
+    * 繰り越し (carryover) 効果がない
+    * 飽和 (satuation) 点がない
+
+## 繰り越し効果
+
+* プロモーションの結果は少し遅れて現れる可能性
+* スポットより数日間のまとまった支出のほうが効果ありそう
+
+```{r, message=F, out.height="60%"}
+geo_weight <- function(l, alpha, theta){
+  alpha^((l - theta)^2)
+}
+adstock <- function(x, weights, L, args, na.rm = T){
+  args$l <- 1:L
+  w <- do.call(weights, args)
+  sum(w * x[1:L], na.rm)/sum(w, na.rm)
+}
+
+hill <- function(x, k, s){
+  1/(x/k)^-s
+}
+
+set.seed(42)
+d <- tibble(t = seq(ymd("2021-03-01"), ymd("2021-04-30"), "1 days")) %>%
+  mutate(spend = rnorm(n = n()))
+d <- d %>% mutate(
+  carryover = slide_dbl(spend, ~ 2 * adstock(.x, geo_weight, L = 7, args = list(alpha = .6, theta = 5)), .before = 7),
+  shape = hill(spend, k = .5, s = 2)
+  ) %>% filter(t >= ymd("2021-04-01")) %>%
+  mutate(
+    spend = (spend - mean(spend)) / sd(spend),
+    carryover = (carryover - mean(carryover))/sd(carryover),
+    shape = (shape - mean(shape))/sd(shape)
+    )
+d %>% pivot_longer(cols = c(spend, carryover)) %>%
+  ggplot(aes(x = t, y = value, group = name, color = name)) +
+  geom_line() + scale_x_date(date_labels = "%m/%d") +
+  scale_color_pander() + theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.title = element_blank()
+    )
+```
+
+## adstock 関数
+
+* $x_t$ を直近 $L$ 期間の重み付き移動平均で変換する
+
+    $$\mathit{adstock}(\boldsymbol{x}_{t};\boldsymbol{w},L):=	\frac{w_{m}(\mathrm{L})\boldsymbol{x}_t}{\sum w_{m}(1)}$$
+* $w_{m}(\mathrm{L})$ の $L$ までの各重みは非負
+* 重み $w$ の付け方は任意, 今回は幾何減衰を採用
+    * $w_{m}^{g}(l;\alpha_{m}):=	\alpha_{m}^{l}$
+    * これをさらに変形して $w_{m}^{d}(l;\alpha_{m},\theta_{m}):=	\alpha_{m}^{(l-\theta_{m})^{2}}$ にする
+    * $\alpha_{m}$: 持続率
+    * (機械学習やノンパラメトリックモデルで使われる動経基底カーネルと同じ)
+
+## 飽和点の問題
+
+* いわゆる「サチる」
+* 単純な回帰分析では「やればやるだけリターン」になる
+* 非現実的ではないか?
+
+```{r satuation-image, out.height="60%"}
+ggplot(tibble(x = 1:20), aes(x = x)) + geom_function(fun = function(x) x^(1/4)) + theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.title = element_blank()
+    )
+```
+
+## hill 関数の導入
+
+:::::: {.cols data-latex=""}
+
+:::{.col data-latex="{0.6\textwidth}"}
+
+* 支出の増大に対して飽和点のある形状へ変換
+
+    \begin{align}
+    &\mathit{Hill}(x_{t,m};K_m,S_m):=\notag\\
+    &\frac{1}{1+(x_{t,m}/K_m)^{-S_m}}\notag
+    \end{align}
+    
+    * メディアによって飽和点が違うと仮定
+    * $S_m > 0$: 傾き
+    * $K_m > 0$: 飽和のタイミング
+    * さらにスケールパラメータ $\beta_m$ を掛ける
+
+:::
+
+:::{.col data-latex="{0.4\textwidth}"}
+
+```{r hill-image, fig.cap="hill 関数の例"}
+bhill <- function(x, b, k, s) b * MediaMixModelModified::hill(x, k, s)
+tibble(x = seq(0, 1.5, by = .05)) %>%
+  ggplot(aes(x = x)) +
+  stat_function(fun = bhill, args = list(k = .5, s = 1, b = .3),
+                aes(color = sprintf("k = %g, s = %g, b = %g", .5, 1, .3))) +
+  stat_function(fun = bhill, args = list(k = .95, s = .748, b = .39),
+                aes(color = sprintf("k = %g, s = %g, b = %g", .95, .748, .39))) +
+  stat_function(fun = bhill, args = list(k = .5, s = 2, b = .3),
+                aes(color = sprintf("k = %g, s = %g, b = %g", .5, 2, .3))) +
+  stat_function(fun = bhill, args = list(k = .5, s = .5, b = .3),
+                aes(color = sprintf("k = %g, s = %g, b = %g", .5, .5, .3))) +
+  stat_function(fun = bhill, args = list(k = 1.5, s = 2, b = .8),
+                aes(color = sprintf("k = %g, s = %g, b = %g", 1.5, 2, .8))) +
+  theme_pander() + scale_color_pander() +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.title = element_blank())
+```
+
+:::
+
+::::::
+
+## 最終的にこういうモデルになる
+
+* $x_{t,m}^\ast$ は adstock で変換した $x_{t,m}$
+* adstock -> hill と hill -> adstock どちらが適切かは断言できない
+* 2つ目の$\sum\cdots$はその他の説明変数 (商品の価格とか)
+* 売上額 $y_t$ は対数変換したほうが当てはまりが良い
+    * 誤差項 $\varepsilon_t$ を正規分布とするため
+
+$$
+\log(y_{t})=	\tau+\sum_m\beta_{m}\mathit{Hill}(x_{t,m}^{\ast};K_m,S_m)+\sum_{c=1}^{C}\gamma_{c}z_{t,c}+\varepsilon_{t}
+$$
+
+## あれ? じゃあ $\beta$ でリターンを計算できなくない?
+
+* `r rmdja::ruby("Return on Ad Spend", "広告支出に対するリターン")` (ROAS) とmarginal ROAS (mROAS) が計算可能
+
+\begin{align}
+\mathit{ROAS}_m &= \frac{\sum_{[t_0, t_1+L-1]} (\hat{Y}(x_{t,m}) - \hat{Y}(\underbar{x}_{t,m}))}{\sum_{[t_0, t_1]} x_{t,m}}\notag\\
+\mathit{mROAS}_m &= \frac{\sum_{[t_0, t_1+L-1]} (\hat{Y}(\tilde{x}_{t,m}) - \hat{Y}(x_{t,m}))}{\sum_{[t_0, t_1]} x_{t,m}}\notag
+\end{align}
+
+* $\underbar{x}_{t,m}$ は比較レベル, 通常はゼロ
+    * 「**もし**広告費を出さなかったら」との比較
+* $\tilde{x}_{t,m}$ は実際の値から $a$ % 増加させた額
+    * 「**もし**広告費を$a$%増やし(減らし)たら」
+
+# R での実装
+
+##
+
+しばらく技術的に細かい話が続きます
+
+## コード
+
+* 著者が Stan コードを添付している
+    * 構文が古い&不要な記述が残っている
+    * 最新版の機能も活用して**修正**
+
+## 先行事例
+
+* 注: 晒しものにしたいという意図はないです
+* 面白いフレームワークが活用されずに埋もれるのが MOTTAINAI
+
+* [ushi-goroshi.hatenablog.com](https://ushi-goroshi.hatenablog.com/entry/2018/03/25/230634)
+
+    最適化の計算が怪しい
+
+* [tjo.hatenablog.com](https://tjo.hatenablog.com/entry/2018/09/01/170340)
+
+   最終結果の掲載が少ない
+
+* [sibylhe/mmm_stan](https://github.com/sibylhe/mmm_stan/blob/main/stan_mmm.ipynb) ([towardsdatascience.com](https://towardsdatascience.com/python-stan-implementation-of-multiplicative-marketing-mix-model-with-deep-dive-into-adstock-a7320865b334), これのみ pystan)
+
+    元のモデルの簡略バージョンの結果しか検証していない
+
+## R の環境設定
+
+* R 4.0.5 (4.1 **ではない**)
+* rstan [@R-rstan] は 2.21
+* 必要な関数の多くはパッケージにまとめた
+    * [リンク先](https://github.com/Gedevan-Aleksizde/MediaMixModelModified)の指示に従いインストール
+    * stan はOS/外部ライブラリ依存が強いので保証はできない
+    * 乱数の結果の完全一致は難しい
+    * 動かない等のバグ報告は歓迎
+* チュートリアルは `doc/main.nb.html` を参考に
+
+## 最近の rstan の注意
+
+* なんか RStudio v1.4 だとよくクラッシュする?([参考](https://github.com/rstudio/rstudio/issues/9055))
+    * `rstan_options(javascript = F)` が有効説
+    * `autowrite = T` を諦めるしかない説
+* あるいは [**cmdStanR**](https://mc-stan.org/cmdstanr/) を選ぶ?
+    * 軽量な Stan インターフェイス
+    * ただし **rstanarm**, **brms** は **rstan** 依存 
+
+## 原文の提案
+
+1. 2つの効果を考えた複雑なモデルにする
+2. モデルの係数を計算する
+3. 係数から広告投資リターン計算
+4. $x$ を変数に最適化問題を解く
+    * 最適配分がわかる
+
+## 修正内容
+
+* 著者のコードを以下の点で修正
+
+1. "`<-`" 代入演算子を "`=`" へ
+    * 将来廃止される予定のため
+1. 不要な変数の削除
+1. バグトラッキングしやすくする
+1. (計算の効率化は時間が足りなかった)
+1. ROAS/mROAS の計算処理を追加
+
+## Stan (MCMC) にありがちなこと
+
+* よくわからないエラーが大量に出る
+    * コンパイル通ったのに実行したらエラーが出る
+    * どこが原因なのか分かりづらい
+* 計算終わったけど収束しない
+* この辺の問題をある程度解消する
+
+## Stan のバグトラッキング
+
+* `nan` になったとか無限大になったとかでエラーが出る
+* (個人的な経験則) 計算時のエラーはだいたい
+    1. 初期値や事前分布の値域が不適切
+    1. データの値が不適切
+* `print`, `reject` を使う ([7.12](https://mc-stan.org/docs/2_21/reference-manual/reject-statements-section.html))
+* 変数に定義域を与える
+
+    ```{cmdstan, echo=T, eval=F, output.var='priors'}
+    row_vector<lower=0>[max_lag] X_media[N, num_media];
+    ```
+
+## Stan のバグトラッキング: 具体的な修正
+
+* 支出 `X` は負値にならない
+    * 原著には書かれてないが, shape 関数の性質から
+    * `<lower=0>` を設定
+* 傾きパラメータ $S$ (`slope`) や $K$ (半飽和点) も負値にならない
+
+    * `reject` 文を使う
+    
+    ```{cmdstan, echo=T, eval=F, output.var='priors'}
+    if (slope[media] < 0) reject("slope[", media, "] must be positive; found slope[media]=", slope[media]);
+    ```
+
+    * サンプリングを reject するだけで中断はしない
+    * 対話的に修正できないので「かもしれないコーディング」を心がける
+
+## Stan のバグトラッキング
+
+* `vb()` で変分ベイズ法で計算
+    * MCMC と比べて非常に早い
+    * コーディングというより運用上のテクニック
+* stan公式「あくまで近似なのでMCMCでも収束するようにしてね」
+* MCMC の予行演習みたいな位置づけ
+    * 変分法でうまく行かなかったら MCMC でも多分失敗
+
+## 動作確認
+
+* 「都合のいい」乱数データで確認
+    * ちょうどいいデータが見つからなかったため
+* 実際の生データでありそうな構造のデータ -> stan入力に変換
+    * **tidyverse** [@R-tidyverse] を駆使して変換
+
+## データの構造
+
+* こんな構造のデータがあるという前提
+    * `media-*` はチャネルごとの支出
+    * `price` は共通の説明変数
+    * `sales` は売上額
+
+```{r}
+df_indiv_params <- tibble(
+  media = factor(1:3),
+  alpha = c(.6, .8, .8),
+  theta = c(5, 3, 4),
+  kappa = rep(.2, 3),
+  s = 1:3,
+  beta = c(.8, .6, .3)
+) %>% mutate(
+  L = rep(13, n()),
+  tau = rep(10, n()),
+  gamma = rep(-.5, n()),
+  err_sigma = rep(.05, n())
+) %>% group_by(media) %>% nest %>% rename(param = data) %>% ungroup
+
+# 疑似データセット作成
+set.seed(42)
+
+df_sim <- tibble(
+  week = seq(ymd("2020-01-01"), ymd("2021-01-01"), "1 week")
+)
+# 全てを tidy で解決しようとした人間の末路
+df <- df_indiv_params %>%
+  mutate(data = map(
+    param,
+    function(para, id){
+      mutate(df_sim,
+             spend = rnorm(n())^2,
+             spend_ast = slide_dbl(
+               spend,
+               function(s) {
+                 para <- as.list(para)
+                 adstock(s, geo_weight, L = para$L, args = para[c("alpha", "theta")])
+                 },
+               .before = para$L, .complete = F
+               )
+             )
+      }
+    )
+    ) %>% dplyr::select(-param) %>% unnest(data)
+ 
+
+df_out <- left_join(
+  df,
+  df_indiv_params %>% unnest(param) %>% dplyr::select(media, kappa, s, beta),
+  by = "media") %>%
+  group_by(week) %>% summarise(sales = sum(beta * hill(spend_ast, kappa, s))) %>%
+  mutate(price = arima.sim(list(order = c(1, 1, 1), ar = .3, ma = .4), n = n())[-1],
+         sales = sales + df_indiv_params$param[[1]]$tau + rnorm(n(), df_indiv_params$param[[1]]$err_sigma)
+         ) %>%
+  right_join(pivot_wider(df, week, media, values_from = spend, names_prefix = "media-"), by = "week")
+
+knitr::kable(head(df_out[20:NROW(df_out), ]), booktabs = T)
+```
+
+## stan の計算実行
+
+```{r eval=F, echo=T}
+# コンパイル
+model <- stan_model(file = "hogehoge.stan",
+                    model_name = "original", verbose = T)
+# 変分法
+res_vb <- vb(object = model_origin,
+             iter = 20000, data = to_stan_data(df_out, L = 13))
+# NUTS
+res <- sampling(model, data = to_stan_data(df_out, L = 13))
+```
+
+## MCMC の事後診断
+
+* 「エラーが発生しなかった!成功!」**そんなことはない**
+* MCMC の収束確認が必要
+
+## 事後診断には **bayesplot** パッケージ
+
+* 昔の参考書[@Matsuura2016]や私の[昔のブログ](https://ill-identified.hatenablog.com/entry/2016/10/07/233000)では [**ggmcmc**](https://cran.r-project.org/web/packages/ggmcmc/index.html) [@ggmcmc2016] を使用
+* 今は [**bayesplot**](https://mc-stan.org/bayesplot/index.html) [@R-bayesplot] のほうが使いやすい
+  * 構文が簡単 ([使用例一覧](https://dastatis.github.io/pdf/StanAdvent2018/bayesplot.html))
+  * ランク正規化プロット[@vehtari2021RankNormalization]などをサポート
+
+
+## 要点: $\hat{R}$ だけで判定は BAD
+
+:::::: {.cols data-latex=""}
+
+:::{.col data-latex="{0.6\textwidth}"}
+
+* 従来は $\hat{R}$ だけ見て 1.05 未満ならOK
+* ランク正規化/畳み込み $\hat{R}$ も要確認
+* どれかが大きいと収束してない可能性
+* トレースプロットもなるべく見る
+* 詳細は @vehtari2021RankNormalization, [**bayesplot** のドキュメント](https://mc-stan.org/bayesplot/articles/visual-mcmc-diagnostics.html)
+    * または [私の解説](https://ill-identified.hatenablog.com/entry/2020/05/21/001158)
+:::
+
+:::{.col data-latex="{0.4\textwidth}"}
+
+````{r rank-trace, cache=T, message=F, warning=F, results='hide', fig.cap="トレースプロットとランク正規化ヒストグラム", fig.width=6.17, fig.height=6.65}
+# TODO: rstan の標準出力どうなってるの?
+stan_cauchy <- "
+parameters {
+  vector[4] x;
+}
+model {
+  x ~ cauchy(0, 1);
+}
+generated quantities {
+  real I = fabs(x[1]) < 1 ? 1 : 0;
+}
+"
+sample1 <- stan(model_code = stan_cauchy, seed=42)
+
+thm <- theme(
+  strip.text = element_text(size = 6, family = "Noto Sans CJK JP"),
+  text = element_text(size = 6, family = "Noto Sans CJK JP"),
+  axis.text.x = element_blank(),
+  axis.text.y = element_blank()
+  )
+
+p1 <- mcmc_trace(sample1, regex_par = "x") + scale_color_colorblind() + thm + theme(plot.margin=unit(c(0, 0, .01, 0), "npc"))
+p2 <- mcmc_rank_overlay(sample1,  regex_pars = "x") + scale_color_colorblind() +
+  thm + theme(axis.title.x = element_blank(), plot.margin=unit(c(.01,0,0,0), "npc"))
+ggarrange(p1, p2, common.legend = T, legend = "right", ncol = 1)
+```
+
+:::
+
+::::::
+
+```{r, results='hide', message=F, warning=F, error=F, cache=T}
+file.copy(system.file("stanmodels/modified.stan", package = "MediaMixModelModified"), "./")
+model <-
+  stan_model(
+    file = "modified.stan",
+    model_name = "original",
+    verbose = T
+  )
+res <- sampling(
+  model,
+  data = to_stan_data(df_out, L = 13)
+)
+```
+
+## bayesplot のコード
+
+* `res` = `stanfit` オブジェクト
+* `regex_pars` は正規表現マッチでパラメータ取得
+* `Rhat()` は3種類の $\hat{R}$ の最大値を返す
+    * しかしなぜか `stanfit` に対応していない
+
+```{r, eval=F, echo=T}
+require(bayesplot)
+mcmc_trace(res, pars = "tau")
+mcmc_rank_overlay(res, regex_pars = "mu")
+mcmc_rhat(
+  apply(rstan::extract(res, pars = "mu", permuted = F, inc_warmup = T), 3, Rhat)
+  ) + yaxis_text(hjust = 1)
+```
+
+## $\hat{R}$ の表示
+
+* 3種類の $\hat{R}$ のうち最大の値を使用
+
+(ref:cap-rhat-slope) $S_m$ の $\hat{R}$
+
+```{r rhat-slope, fig.cap="(ref:cap-rhat-slope)", out.height = "70%"}
+mcmc_rhat(
+  apply(rstan::extract(res, pars = "slope", permuted = F, inc_warmup = T), 3, Rhat)
+  ) + yaxis_text(hjust = 1) +
+  theme_default(base_family = "Noto Sans CJK JP")
+```
+
+
+## ランク正規化プロット
+
+(ref:cap-normal-rank) $\beta_m$ のランク正規化ヒストグラム
+
+```{r, normal-rank-beta, fig.cap="(ref:cap-normal-rank)", out.height = "70%"}
+mcmc_rank_overlay(res, regex_pars = "beta", facet_args = list(ncol = 1)) + 
+  theme_default(base_size = 8, base_family = "Noto Sans CJK JP") +
+  scale_color_pander()
+```
+
+## 計算結果
+
+(ref:cap-beta-area) $\beta_m$ のエリアプロット
+
+```{r beta-area, out.height = "70%", fig.cap="(ref:cap-beta-area)"}
+mcmc_areas(res, regex_pars = "beta_media") + 
+  geom_point(
+    aes(y = name, x = beta),
+    data = unnest(df_indiv_params, param) %>% mutate(name = sprintf("beta_medias[%g]", media))) +
+  labs(caption = "黒点 = 正解")
+```
+
+## (m)ROAS の計算
+
+* R で計算関数を作成
+    * stan 内でも可能だが使いづらい
+* `ROAS()`, `mROAS()` を用意
+    * 現時点ではあまりスマートな設計でない...
+    * `L` の手動入力
+    * **とても遅い**
+
+```{r roas, cache=T, echo=T}
+roas <- ROAS(res, df_out, L = 13)
+mroas <- mROAS(res, df_out, L = 13)
+```
+
+## 結果
+
+* 明らかにミスってるので後で修正します
+
+```{r plot-roas, fig.width=8, fig.height=3, out.height="30%"}
+ggplot(roas, aes(x = ROAS, group = media)) + geom_histogram(bins = 30) +
+  facet_wrap(~media)
+ggplot(mroas, aes(x = ROAS, group = media)) + geom_histogram(bins = 30) +
+  facet_wrap(~media)
+```
+
+# より大きな問題点
+
+##
+
+ここまではプログラム実装上の問題. マイクロマネジメント的な話
+
+以降は実用する上でより重大な問題点に触れる
+
+## 問題点
+
+上の方ほど深刻な問題点
+
+1. この方法で最適配分は分からない
+    * いわゆる因果推論ではない
+1. メディア「ミックス」できてない
+    * IID を前提にしている
+1. データが ARIMA (非定常) ではないように見える
+
+## 1. 最適配分を知ることは可能か
+
+* 「推定したパラメータを固定して $\min_x\hat{Y}(x)$ から最適な予算配分 $x$ を求める」 としている
+    * データにない $x_{m, t}$ を与えて売上の予測値を見ている (= 外挿)
+    * 外挿がどの程度妥当かの評価は難しい
+* 因果推論の観点からはかなり怪しい
+    * 観察データのみで結論するのはかなり厳しい
+    * 参考: 最近邦訳のでた Rosenbaum [@rosenbaum2017Observation]
+* 他の人もあまりこの方法には触れていない...
+
+## 2. メディア「ミックス」していない
+
+* メディア間のシナジー効果はないと仮定
+    * IID の仮定につながる
+    * 似たような問題意識を持っている人はいる([参考](https://ushi-goroshi.hatenablog.com/entry/2018/02/20/121958))
+* モデルはあくまで近似, 目的に応じて使用
+    * シナジー効果の測定に興味があるか
+    * 無視したシナジー効果の実際の影響がどの程度か
+
+## 3. データが非定常かどうか
+
+* マーケティングでは非定常な時系列データを扱うことも多そう
+    * @hanssens2002Market なんかを読んだ感想
+* 原著では乱数を ARIMA で生成したとある.
+    * しかし I がゼロ次のデータに見える
+    * ランダムウォークはこうはならない
+* 目視は厳密ではないが元データ非公開
+
+```{r, out.height="40%", fig.width = 8, fig.height = 5}
+set.seed(42)
+d_ts <- tibble(`ARIMA(1, 1, 1)` = arima.sim(list(order = c(1,1,1), ar = 0.3, ma = .1), n = 100)[-1],
+            `ARMA(1, 1)` = arima.sim(list(order = c(1,0,1), ar = 0.3, ma = .1), n = 100)
+            ) %>%
+  mutate(time = row_number())
+ggplot(pivot_longer(d_ts, cols = -time), aes(x = time, y = value)) +
+  geom_line() +
+  facet_wrap(~name, ncol = 1, scales = "free_y", strip.position = "left") +
+  theme_pander() + theme(axis.title.y = element_blank(), axis.text = element_blank(), axis.ticks = element_blank())
+```
+
+## 使用上の注意についての要約
+
+* MMMのネガキャンをしたいわけではない
+    * 完璧なモデルはまず存在しない
+    * 用法を守って使いましょう, という意図
+
+1. 最適配分を求める際はデータをどう取得したかに注意
+    * 観察データではなく実験データを使う
+    * 測定期間中に予算配分を操作しないとか
+1. シナジー効果がないような状況が必要
+    * 「メディア」「チャネル」の定義に注意
+1. データが非定常な場合はどうなるか未検証
+
+## その他の言い訳
+
+* 本当は後半の「より大きな問題点」のほうが優先すべきだったかも
+    * しかし完成させるには時間が足りない
+* モデルの当てはまりの評価もできるようにしたかった
+  * BIC と bridge/path sampling ([Vehtari のコメント](https://discourse.mc-stan.org/t/how-can-i-compute-wbic-with-for-a-brms-fit/17793/6)) の計算処理とか
+* 応用事例や類似モデルのサーベイもしたかった
+    * Hill/Shape 変換なしの比較とか
+* いろいろな乱数データで当てはまりを確認したかった
+    * 都合の良いデータだけならなんとでも言える
+    * どの程度ロバストなモデルかは応用で重要
+* 今回上げたMMMの問題点・課題を解消する具体的方法まで考えたかった...
+
+```{r bib, includes=F}
+knitr::write_bib(
+  c("ggmcmc", "bayesplot", "rstan", "renv", "tidyverse", "ggthemes"),
+  file = "packages.bib")
+```
