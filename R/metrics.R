@@ -89,7 +89,7 @@ ROAS <- function(fit, data = NULL, L, controls = "price", reference = 0){
   pred_ref <- predict(fit, newdata = newdata)
   d <- expand_grid(
     tibble(ROAS = rowSums(pred - pred_ref)),
-    tibble(media = colnames(spend), x = spend)
+    tibble(media = names(spend), x = spend)
   )
   d$ROAS <- with(d, ROAS/x)
   d$x <- NULL
